@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
-class AsyncTCPServer
+class AsyncSocketServer
 {
     private static readonly Dictionary<string, float> currency = new()
     {
@@ -21,54 +21,44 @@ class AsyncTCPServer
 
     static async Task Main()
     {
-        TcpListener listener = new(IPAddress.Loopback, 5000);
-        listener.Start();
-        Console.WriteLine("Server is running on 127.0.0.1:5000...");
+        Socket listener = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Any, 5000));
+        listener.Listen(10);
+        Console.WriteLine("Socket Server is running on port 5000...");
 
         while (true)
         {
-            TcpClient client = await listener.AcceptTcpClientAsync();
-            await HandleClientAsync(client);
+            Socket clientSocket = await listener.AcceptAsync();
+            await HandleClientAsync(clientSocket);
         }
     }
 
-    private static async Task HandleClientAsync(TcpClient client)
+    private static async Task HandleClientAsync(Socket clientSocket)
     {
-        var endPoint = client.Client.RemoteEndPoint.ToString();
-        Console.WriteLine($"Client connected: {endPoint}");
-        NetworkStream stream = client.GetStream();
-
-
+        IPEndPoint clientEndPoint = (IPEndPoint)clientSocket.RemoteEndPoint;
+        Console.WriteLine($"Client connected: {clientEndPoint}");
+        byte[] buffer = new byte[1024];
 
         try
         {
             while (true)
             {
-                string request = await ReceiveMessageAsync(stream);
-                if (request == "exit") break;
+                int received = await clientSocket.ReceiveAsync(buffer, SocketFlags.None);
+                if (received == 0) break;
 
-                if (clientRequests.ContainsKey(endPoint) && clientRequests[endPoint] >= MaxRequests)
-                {
-                    await SendMessageAsync(stream, "Request limit exceeded. Try again later.");
-                    client.Close();
-                    return;
-                }
+                string request = Encoding.UTF8.GetString(buffer, 0, received);
+                if (request == "exit") break;
 
                 string[] parts = request.Split(' ');
                 if (parts.Length != 2 || !currency.ContainsKey(parts[0]) || !currency.ContainsKey(parts[1]))
                 {
-                    await SendMessageAsync(stream, "Invalid currencies.");
+                    await SendMessageAsync(clientSocket, "Invalid currencies.");
                     continue;
                 }
 
                 float result = currency[parts[0]] / currency[parts[1]];
-                await SendMessageAsync(stream, result.ToString());
-                Console.WriteLine($"{endPoint} requested conversion: {parts[0]} to {parts[1]} - Result: {result}");
-
-                if (!clientRequests.ContainsKey(endPoint))
-                    clientRequests[endPoint] = 1;
-                else
-                    clientRequests[endPoint]++;
+                await SendMessageAsync(clientSocket, result.ToString());
+                Console.WriteLine($"{clientEndPoint} requested conversion: {parts[0]} to {parts[1]} - Result: {result}");
             }
         }
         catch (Exception ex)
@@ -77,21 +67,14 @@ class AsyncTCPServer
         }
         finally
         {
-            Console.WriteLine($"Client disconnected: {endPoint}");
-            client.Close();
+            Console.WriteLine($"Client disconnected: {clientEndPoint}");
+            clientSocket.Close();
         }
     }
 
-    private static async Task<string> ReceiveMessageAsync(NetworkStream stream)
-    {
-        byte[] buffer = new byte[1024];
-        int received = await stream.ReadAsync(buffer, 0, buffer.Length);
-        return Encoding.UTF8.GetString(buffer, 0, received);
-    }
-
-    private static async Task SendMessageAsync(NetworkStream stream, string message)
+    private static async Task SendMessageAsync(Socket clientSocket, string message)
     {
         byte[] buffer = Encoding.UTF8.GetBytes(message);
-        await stream.WriteAsync(buffer, 0, buffer.Length);
+        await clientSocket.SendAsync(buffer, SocketFlags.None);
     }
 }
